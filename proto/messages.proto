@@ -1,0 +1,211 @@
+syntax = "proto3";
+option go_package = "./proto";
+
+message Registration {
+  string ConnectionAddress = 2;
+  uint64 TotalSize = 3;
+}
+
+message RegistrationAck {
+  bool Accepted = 1;
+  string Id = 2;
+  string Message = 3;
+}
+
+message HeartBeat {
+  string Id = 1;
+  bool Alive = 2;
+  uint64 UsedSpace = 3;
+  int64 TotalRequest = 4;
+}
+
+message Wrapper {
+  oneof messages {
+    Registration Registration = 1;
+    RegistrationAck RegistrationAck = 2;
+    HeartBeat  HeartBeat = 3;
+    ClientCommands ClientCommands = 4;
+    CommandResponse CommandResponse = 5;
+    ChunkedFile ChunkedFile = 6;
+    ChunkReceivedAck ChunkedReceivedAck = 7;
+    SendReplicaRequest SendReplicaRequest = 8;
+    GetChunkRequest GetChunkRequest = 9;
+    GetChunkResponse GetChunkResponse = 10;
+  }
+}
+
+// -----------------chunk transfer to node ----------------
+message ChunkReceivedAck {
+  string errorMessage = 1;
+  uint64 fileId = 2;
+  uint64 chunkNumber = 3;
+  string chunkName = 4;
+  uint64 chunkSize = 5;
+}
+
+message ChunkedFile {
+  uint64 fileId = 1;
+  string chunkName = 2;
+  uint64 chunkNumber = 3;
+  uint64 chunkSize = 4;
+  bytes chunkedFile = 5;
+}
+// --------------------------------------------------------
+
+// -----------------chunk transfer from node --------------
+message GetChunkRequest {
+  string chunkName = 1;
+  uint64 chunkNumber = 2;
+}
+
+message GetChunkResponse {
+  string chunkName = 1;
+  bytes chunkedData = 2;
+  string error = 3;
+}
+
+
+// --------------------------------------------------------
+
+// -----------------replica messages ----------------------
+message SendReplicaRequest {
+  string chunkName = 1;
+  uint64 fileId = 2;
+  uint64 chunkNumber = 3;
+  uint64 chunkSize = 4;
+  string targetIp = 5;
+}
+// --------------------------------------------------------
+
+// -----------------command responses----------------------
+message CommandResponse {
+  oneof responses {
+    LsResponse LsResponse = 1;
+    CdResponse CdResponse = 2;
+    MkdirResponse MkdirResponse = 3;
+    ShowNodesResponse ShowNodesResponse = 4;
+    DeleteFileResponse DeleteFileResponse = 5;
+    ShareFileResponse ShareFileResponse = 6;
+    GetFileResponse GetFileResponse = 7;
+    PwdResponse PwdResponse = 8;
+  }
+}
+
+message LsResponse {
+  string fileList = 1;
+  string errorMessage = 2;
+}
+
+message CdResponse {
+  string newPath = 1;
+  string errorMessage = 2;
+}
+
+message MkdirResponse {
+  string errorMessage = 1;
+}
+
+message ShowNodesResponse {
+  string nodeList = 1;
+  string errorMessage = 2;
+}
+
+message DeleteFileResponse {
+  bool ok = 1;
+  string errorMessage = 2;
+}
+
+message ShareFileResponse {
+  /**
+  add proper response
+   */
+  uint64 ChunkSize = 1;
+  repeated ShareFileNodeAddress nodeAddress = 2;
+  string errorMessage = 3;
+}
+
+message ShareFileNodeAddress {
+  string nodeAddress = 1;
+  uint64 fileId = 2;
+  repeated ChunkNameAndNumber chunkNameAndNumber = 3;
+}
+
+message ChunkNameAndNumber {
+  string chunkName = 1;
+  uint64 chunkNumber = 2;
+}
+
+message GetFileResponse {
+  /**
+ add proper response
+  */
+  string errorMessage = 1;
+  uint64 fileSize = 2;
+  string fileName = 3;
+  repeated ChunksPerNode chunksPerNode = 4;
+}
+
+message ChunksPerNode {
+  string nodeIp = 1;
+  repeated ChunkNameAndNumber chunkNameAndNumber = 2;
+}
+
+message PwdResponse {
+  string directoryPath = 1;
+  string errorMessage = 2;
+}
+
+// --------------------------------------------------------
+
+// -----------------client commands------------------------
+
+message ClientCommands {
+  oneof commands {
+    ListFiles ListFiles = 1;
+    ChangeDir ChangeDir = 2;
+    MakeDir MakeDir = 3;
+    ShowNodes ShowNodes = 4;
+    DeleteFile DeleteFile = 5;
+    ShareFile ShareFile = 6;
+    GetFile GetFile = 7;
+    PrintWorkingDir PrintWorkingDir = 8;
+  }
+}
+
+message ListFiles {
+  string path = 1;
+}
+
+message ChangeDir {
+  string currentDir = 1;
+  string targetDir = 2;
+}
+
+message MakeDir {
+  string targetDir = 1;
+  string name = 2;
+}
+
+message PrintWorkingDir {
+  string targetDir = 1;
+}
+
+message ShowNodes {
+
+}
+
+message DeleteFile {
+  string targetDir = 1;
+}
+
+message ShareFile {
+  string targetDir = 1;
+  string fileName = 2;
+  uint64 fileSize = 3;
+}
+
+message GetFile {
+  string targetPath = 2;
+}
+
+// ---------------------------------------

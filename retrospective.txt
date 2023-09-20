@@ -1,0 +1,22 @@
+Project Retrospective
+
+1) How many extra days did you use for the project?
+
+	More than I should have. But to be fair, I started the project all over again after my first attempt
+
+2) Given the same goals, how would you complete the project differently?
+
+	Would optimize my SQL queries, and make fewer queries to the database in general. Maybe spend more time about how to distribute the chunks to the storage node
+
+3) Let’s imagine that your next project was to improve and extend P1. What are the features/functionality you would add, use cases you would support, etc?
+
+	Add a load balancing mechanism, reduce the size of my chunks, add a progress bar, make the ui much better.
+	Try to give the client a copy of the file system, and make handle those requests at the client side.
+
+4) Give a rough estimate of how long you spent completing this assignment.
+
+	60 hours
+
+5) What did you learn from completing this project?
+
+	Learnt go, and how a dfs works
