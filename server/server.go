@@ -6,14 +6,12 @@ import (
 	"Hackerman/utils"
 	"database/sql"
 	log "github.com/sirupsen/logrus"
-	"math"
 	"math/rand"
 	_ "modernc.org/sqlite"
 	"net"
 	"os"
 	"path/filepath"
 	"strconv"
-	"strings"
 	"sync"
 	"time"
 )
@@ -133,6 +131,8 @@ func (s *Server) handleRequest(reqHandler *proto.MessageHandler) {
 			continue
 		}
 
+		//s.logger.Info("Got a request")
+
 	parentSwitch:
 		switch request.Messages.(type) {
 		case *proto.Wrapper_Registration:
@@ -234,7 +234,7 @@ func (s *Server) handleRequest(reqHandler *proto.MessageHandler) {
 				targetDir := request.GetClientCommands().GetShareFile().GetTargetDir()
 				fileName := request.GetClientCommands().GetShareFile().GetFileName()
 				fileSize := request.GetClientCommands().GetShareFile().GetFileSize()
-				chunkPrefix := strings.Split(fileName, ".")[0]
+				chunkCount := request.GetClientCommands().GetShareFile().GetChunkCount()
 
 				targetExist := s.fs.CheckDirExist(targetDir)
 				if !targetExist {
@@ -254,32 +254,20 @@ func (s *Server) handleRequest(reqHandler *proto.MessageHandler) {
 					break parentSwitch
 				}
 
-				shareFileResponse.NodeAddress = make([]*proto.ShareFileNodeAddress, 0)
-
-				chunksCount := uint64(math.Ceil(float64(fileSize) / float64(s.chunkSize)))
 				availableNodes := GetAvailableIps(s.nodeMap, s.logger)
-
-				// https://stackoverflow.com/questions/33994677/pick-a-random-value-from-a-go-slice
+				chunkAssignment := make(map[string]int64)
 				rand.Seed(time.Now().Unix()) // initialize global pseudo random generator
 
-				// temp variable to first get the assignments
-				nodeAddressListMap := make(map[string][]*proto.ChunkNameAndNumber)
-
-				// doing this because otherwise 0 is being ignored in chunk name and number
-				for number := 1; uint64(number) < chunksCount+1; number++ {
-					s.logger.Debugf("Len of available nodes is %d", len(availableNodes))
+				for i := uint64(0); i < chunkCount; i++ {
 					randomNode := availableNodes[rand.Intn(len(availableNodes))]
-					if _, exist := nodeAddressListMap[randomNode]; !exist {
-						nodeAddressListMap[randomNode] = make([]*proto.ChunkNameAndNumber, 0)
+					if _, present := chunkAssignment[randomNode]; !present {
+						chunkAssignment[randomNode] = 0
 					}
-					nodeAddressListMap[randomNode] = append(nodeAddressListMap[randomNode], &proto.ChunkNameAndNumber{
-						ChunkName:   chunkPrefix + strconv.FormatUint(uint64(number), 10),
-						ChunkNumber: uint64(number),
-					})
+					chunkAssignment[randomNode]++
 				}
 
 				// id of file in the database
-				fileId, insertOk := s.fs.InsertFile(fileName, filepath.Join(targetDir, fileName), chunksCount, targetDir, fileSize, "IN PROGRESS")
+				fileId, insertOk := s.fs.InsertFile(fileName, filepath.Join(targetDir, fileName), chunkCount, targetDir, fileSize, "IN PROGRESS")
 				s.logger.Debugf("File id which server is sending to client is %d", fileId)
 
 				if !insertOk {
@@ -291,22 +279,8 @@ func (s *Server) handleRequest(reqHandler *proto.MessageHandler) {
 				}
 
 				s.logger.Infof("File successfully stored in database, id is %d", fileId)
-
-				for key, value := range nodeAddressListMap {
-					chunkedNodeAddr := &proto.ShareFileNodeAddress{
-						FileId:             fileId,
-						NodeAddress:        key,
-						ChunkNameAndNumber: value,
-					}
-
-					shareFileResponse.NodeAddress = append(shareFileResponse.NodeAddress, chunkedNodeAddr)
-				}
-
-				shareFileResponse.ChunkSize = s.chunkSize
-
-				s.logger.Debugf("Sending share file response")
-				s.logger.Debug(shareFileResponse)
-
+				shareFileResponse.FileId = fileId
+				shareFileResponse.ChunkPerNode = chunkAssignment
 				responseWrapper := &proto.CommandResponse{Responses: &proto.CommandResponse_ShareFileResponse{ShareFileResponse: shareFileResponse}}
 				wrapper := &proto.Wrapper{Messages: &proto.Wrapper_CommandResponse{CommandResponse: responseWrapper}}
 				reqHandler.Send(wrapper)
@@ -345,6 +319,7 @@ func (s *Server) handleRequest(reqHandler *proto.MessageHandler) {
 
 				for chunkNumber, val := range fileChunkInfo {
 					chunkName := val.ChunkName
+					startingOffset := val.StartingOffset
 					randomIp := val.NodeIps[rand.Intn(len(val.NodeIps))]
 
 					if _, exists := targetNodes[randomIp]; !exists {
@@ -352,8 +327,9 @@ func (s *Server) handleRequest(reqHandler *proto.MessageHandler) {
 					}
 
 					chunkNameAndNumber := &proto.ChunkNameAndNumber{
-						ChunkName:   chunkName,
-						ChunkNumber: chunkNumber,
+						ChunkName:      chunkName,
+						ChunkNumber:    chunkNumber,
+						StartingOffset: startingOffset,
 					}
 
 					targetNodes[randomIp] = append(targetNodes[randomIp], chunkNameAndNumber)
@@ -393,8 +369,95 @@ func (s *Server) handleRequest(reqHandler *proto.MessageHandler) {
 
 				break parentSwitch
 			}
+		case *proto.Wrapper_ComputeCommands:
+			s.logger.Info("Got a compute command request")
+			s.handleComputeCommands(reqHandler, request.GetComputeCommands())
 		}
 	}
+}
+
+func (s *Server) handleComputeCommands(reqHandler *proto.MessageHandler, request *proto.ComputeCommands) {
+	switch request.GetCommands().(type) {
+	case *proto.ComputeCommands_FileInfoRequest:
+		s.logger.Info("Got request to get file info")
+		getFileInfoResponse := &proto.FileInfoResponse{}
+		targetExist := s.fs.CheckDirExist(request.GetFileInfoRequest().GetDestPath())
+
+		if !targetExist {
+			s.logger.Error("Invalid destination")
+			getFileInfoResponse.ErrorMessage = "Invalid destination"
+			responseWrapper := &proto.ComputeCommands{Commands: &proto.ComputeCommands_FileInfoResponse{FileInfoResponse: getFileInfoResponse}}
+			wrapper := &proto.Wrapper{Messages: &proto.Wrapper_ComputeCommands{ComputeCommands: responseWrapper}}
+			reqHandler.Send(wrapper)
+			return
+		}
+
+		s.logger.Info("Checking for file id")
+		fileId, fileSize, errorMessage := s.fs.CheckIsFile(request.GetFileInfoRequest().GetFilePath())
+
+		if errorMessage != "" {
+			s.logger.Error(errorMessage)
+			getFileInfoResponse.ErrorMessage = errorMessage
+			responseWrapper := &proto.ComputeCommands{Commands: &proto.ComputeCommands_FileInfoResponse{FileInfoResponse: getFileInfoResponse}}
+			wrapper := &proto.Wrapper{Messages: &proto.Wrapper_ComputeCommands{ComputeCommands: responseWrapper}}
+			reqHandler.Send(wrapper)
+			return
+		}
+
+		s.logger.Info("Getting chunk addr")
+		// map[chunkNum][]nodeIps
+		chunkAddr, ok := s.fs.GetFileChunkAddresses(uint64(fileId))
+
+		if !ok {
+			s.logger.Error("Error in getting chunk addresses")
+			getFileInfoResponse.ErrorMessage = "Error in getting chunk addresses"
+			responseWrapper := &proto.ComputeCommands{Commands: &proto.ComputeCommands_FileInfoResponse{FileInfoResponse: getFileInfoResponse}}
+			wrapper := &proto.Wrapper{Messages: &proto.Wrapper_ComputeCommands{ComputeCommands: responseWrapper}}
+			reqHandler.Send(wrapper)
+			return
+		}
+
+		s.logger.Info("Getting inverted chunk db count")
+		// map[nodeIp][]chunkNames
+		invertedChunkAddr := invertDbChunkCount(chunkAddr)
+		chunksPerIpList := make([]*proto.ChunksPerIp, 0)
+		for nodeIp, chunkNameList := range invertedChunkAddr {
+			chunkPerIp := &proto.ChunksPerIp{
+				NodeIp:    nodeIp,
+				ChunkName: chunkNameList,
+			}
+
+			chunksPerIpList = append(chunksPerIpList, chunkPerIp)
+		}
+
+		getFileInfoResponse.ChunksPerIp = chunksPerIpList
+		getFileInfoResponse.FileSize = fileSize
+		responseWrapper := &proto.ComputeCommands{Commands: &proto.ComputeCommands_FileInfoResponse{FileInfoResponse: getFileInfoResponse}}
+		wrapper := &proto.Wrapper{Messages: &proto.Wrapper_ComputeCommands{ComputeCommands: responseWrapper}}
+
+		s.logger.Info("Sending response for getFileInfo")
+
+		reqHandler.Send(wrapper)
+	}
+}
+
+func invertDbChunkCount(chunkAddr map[uint64]*filesystem.DbChunkCount) map[string][]string {
+	invertedMap := make(map[string][]string)
+
+	for _, chunkInfo := range chunkAddr {
+		ipList := chunkInfo.NodeIps
+		chunkName := chunkInfo.ChunkName
+
+		for _, ip := range ipList {
+			if _, present := invertedMap[ip]; !present {
+				invertedMap[ip] = make([]string, 0)
+			}
+
+			invertedMap[ip] = append(invertedMap[ip], chunkName)
+		}
+	}
+
+	return invertedMap
 }
 
 /** Since before we listen for new information, we have to first register the node, so we need to pass in registrationMessage */
@@ -456,13 +519,14 @@ func (s *Server) handleNode(reqHandler *proto.MessageHandler, registrationMessag
 			chunkNumber := receivedMessage.GetChunkedReceivedAck().GetChunkNumber()
 			chunkName := receivedMessage.GetChunkedReceivedAck().GetChunkName()
 			chunkSize := receivedMessage.GetChunkedReceivedAck().GetChunkSize()
+			startingOffset := receivedMessage.GetChunkedReceivedAck().GetStartingOffset()
 
 			if receivedMessage.GetChunkedReceivedAck().GetErrorMessage() != "" {
 				s.logger.Errorf("Node %s did not receive chunk num %d chunkName %s", node.Id, chunkNumber, chunkName)
 				break
 			}
 
-			s.fs.InsertChunk(fileId, chunkNumber, chunkName, node.ConnectionAddress, chunkSize)
+			s.fs.InsertChunk(fileId, chunkNumber, chunkName, node.ConnectionAddress, chunkSize, startingOffset)
 
 			if status, err := s.fs.GetFileStatus(fileId); err != false && status != filesystem.Ready {
 				expectedFileChunkCount, _ := s.fs.ExpectedChunkCount(fileId)
@@ -470,6 +534,11 @@ func (s *Server) handleNode(reqHandler *proto.MessageHandler, registrationMessag
 				if expectedFileChunkCount == uint64(len(actualFileChunkCount)) {
 					s.fs.UpdateFileStatus(fileId, "READY")
 				}
+			}
+
+			// if client does not want to replicate we break
+			if receivedMessage.GetChunkedReceivedAck().GetReplication() != true {
+				break
 			}
 
 			chunkInfo, infoOk := s.fs.GetCountOfChunk(chunkName)
@@ -489,11 +558,13 @@ func (s *Server) handleNode(reqHandler *proto.MessageHandler, registrationMessag
 				for key, present := range chunkInfo.NotIn {
 					if present == true { // if notIn == true
 						sendReplicaRequest := &proto.SendReplicaRequest{
-							ChunkName:   chunkInfo.ChunkName,
-							TargetIp:    key,
-							FileId:      fileId,
-							ChunkNumber: chunkInfo.ChunkNumber,
-							ChunkSize:   chunkInfo.ChunkSize,
+							ChunkName:      chunkInfo.ChunkName,
+							TargetIp:       key,
+							FileId:         fileId,
+							ChunkNumber:    chunkInfo.ChunkNumber,
+							ChunkSize:      chunkInfo.ChunkSize,
+							StartingOffset: chunkInfo.StartingOffset,
+							Replication:    receivedMessage.GetChunkedReceivedAck().GetReplication(),
 						}
 
 						wrapper := &proto.Wrapper{Messages: &proto.Wrapper_SendReplicaRequest{SendReplicaRequest: sendReplicaRequest}}

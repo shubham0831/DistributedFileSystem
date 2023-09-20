@@ -31,7 +31,133 @@ message Wrapper {
     SendReplicaRequest SendReplicaRequest = 8;
     GetChunkRequest GetChunkRequest = 9;
     GetChunkResponse GetChunkResponse = 10;
+    ComputeJob ComputeJob = 11;
+    ComputeCommands ComputeCommands = 12; // from computation manager to server // ideally this would be in a separate protofile
+    MRStatusUpdate MRStatusUpdate = 13;
   }
+}
+
+message MRStatusUpdate {
+  bool jobComplete = 1;
+  string message = 2;
+}
+
+message ChunkedMappedFile {
+  string fileName = 1;
+  string jobId = 2;
+  int32 numberOfChunks = 3;
+  string chunkName = 4;
+  int32 chunkNumber = 5;
+  int64 chunkSize = 6;
+  bytes chunkedFile = 7;
+  int64 startingOffset = 8;
+}
+
+message ComputeCommands {
+  oneof commands {
+    FileInfoRequest FileInfoRequest = 1;
+    FileInfoResponse FileInfoResponse = 2;
+    RunJobRequest RunJobRequest = 3;
+    RunJobResponse RunJobResponse = 4;
+  }
+}
+
+message RunJobRequest {
+  oneof request {
+    ReduceRequest reduceRequest = 1;
+    MapRequest mapRequest = 2;
+    ChunkedMappedFile chunkedMappedFile = 3;
+    PluginDownload pluginDownload = 4;
+  }
+}
+
+message PluginDownload {
+  string jobId = 1;
+  bytes plugin = 2;
+  string pluginName = 3;
+}
+
+message ReduceRequest {
+  string jobId = 1;
+  map<string, ReduceFileList> reducerFileMap = 2;
+  string targetPath = 3;
+}
+
+message ReduceFileList {
+  repeated string fileNames = 1;
+}
+
+message MapRequest {
+  string jobId = 1;
+  repeated string ChunkNames = 2;
+  repeated string Reducers = 3;
+  int32 numberOfMappers = 4;
+  bytes plugin = 5;
+  string pluginName = 6;
+}
+
+message RunJobResponse {
+  oneof response {
+    MapResponse MapResponse = 1;
+    ReduceResponse ReduceResponse = 2;
+  }
+}
+
+message MapResponse {
+  string ChunkName = 1;
+  bool ShufflingComplete = 2;
+  repeated FileSentToReducer FilesSentToReducer = 3;
+  string ErrorMessage = 4;
+}
+
+message FileSentToReducer {
+  string reducerIp = 1;
+  string fileName = 2;
+}
+
+message ReduceResponse {
+  string FileName = 1;
+  string nodeIp = 2;
+  string ErrorMessage = 3;
+}
+
+message FileInfoRequest {
+  string FilePath = 1;
+  string DestPath = 2;
+}
+
+message FileInfoResponse {
+   string ErrorMessage = 1;
+   int64 FileSize = 2;
+   repeated ChunksPerIp ChunksPerIp = 3;
+}
+
+message ChunksPerIp {
+  string nodeIp = 1;
+  repeated string chunkName = 2;
+}
+
+message ComputeJob {
+  oneof commands {
+    MapReduceRequest MapReduceRequest = 1;
+    MapReduceResponse MapReduceResponse = 2;
+  }
+}
+
+message MapReduceRequest {
+  string filePath = 1;
+  string pluginName = 2;
+  bytes plugin = 3;
+  int32 numOfMappers = 4;
+  int32 numOfReducers = 5;
+  string reducerKey = 6;
+  string serverAddr = 7;
+  string destPath = 8;
+  bool maxParallelization = 9;
+}
+
+message MapReduceResponse {
+  string ErrorMessage = 1;
 }
 
 // -----------------chunk transfer to node ----------------
@@ -41,6 +167,8 @@ message ChunkReceivedAck {
   uint64 chunkNumber = 3;
   string chunkName = 4;
   uint64 chunkSize = 5;
+  uint64 startingOffset = 6;
+  bool replication = 7;
 }
 
 message ChunkedFile {
@@ -48,7 +176,9 @@ message ChunkedFile {
   string chunkName = 2;
   uint64 chunkNumber = 3;
   uint64 chunkSize = 4;
-  bytes chunkedFile = 5;
+  uint64 startingOffset = 5;
+  bytes chunkedFile = 6;
+  bool replication = 7;
 }
 // --------------------------------------------------------
 
@@ -74,6 +204,8 @@ message SendReplicaRequest {
   uint64 chunkNumber = 3;
   uint64 chunkSize = 4;
   string targetIp = 5;
+  uint64 startingOffset = 6;
+  bool replication = 7;
 }
 // --------------------------------------------------------
 
@@ -116,11 +248,8 @@ message DeleteFileResponse {
 }
 
 message ShareFileResponse {
-  /**
-  add proper response
-   */
-  uint64 ChunkSize = 1;
-  repeated ShareFileNodeAddress nodeAddress = 2;
+  map<string, int64> chunkPerNode = 1;
+  uint64 fileId = 2;
   string errorMessage = 3;
 }
 
@@ -133,6 +262,7 @@ message ShareFileNodeAddress {
 message ChunkNameAndNumber {
   string chunkName = 1;
   uint64 chunkNumber = 2;
+  uint64 startingOffset = 3;
 }
 
 message GetFileResponse {
@@ -202,6 +332,7 @@ message ShareFile {
   string targetDir = 1;
   string fileName = 2;
   uint64 fileSize = 3;
+  uint64 chunkCount = 4;
 }
 
 message GetFile {

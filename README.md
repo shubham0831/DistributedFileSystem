@@ -7,7 +7,7 @@
 
 ```jsx
 // cd into the directory where the database is
-cd /bigdata/spareek/project/P1-hackerman/
+cd /bigdata/spareek/project/P2-shubham0831/
 // if you want a fresh table
 /home/spareek/go/bin/server -la orionXX.cs.usfca.edu:PORT -db ./server/db.db -freshTable true
 // if you don't want a fresh table
@@ -18,7 +18,7 @@ cd /bigdata/spareek/project/P1-hackerman/
 
 ```jsx
 // cd into the correct directory
-cd /bigdata/spareek/project/P1-hackerman/scripts
+cd /bigdata/spareek/project/P2-shubham0831/scripts
 // start the cluster
 ./start-cluster.sh
 ```
@@ -64,4 +64,9 @@ Share File
 Get File
 
 ![image](https://user-images.githubusercontent.com/48670085/197638152-81d4fa99-0132-43f4-95b6-0dbdc864fb5d.png)
+
+Map Reduce 
+
+![mapReduce](https://user-images.githubusercontent.com/48670085/206827510-13205356-d91b-45c6-b041-8e5368d2e904.png)
+
 

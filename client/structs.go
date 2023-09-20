@@ -38,6 +38,7 @@ type WriterMessageStruct struct {
 	NumberOfChunks uint64
 	ChunkName      string
 	ChunkNumber    uint64
+	StartingOffset uint64
 	ChunkedBytes   []byte
 	File           *os.File
 }
@@ -78,9 +79,9 @@ type DeleteFileResponse struct {
 }
 
 type ShareFileResponse struct {
-	ErrorMessage  string
-	ChunkSize     uint64
-	NodeAddresses []*ShareFileNodeAddress
+	ErrorMessage    string
+	ChunkAssignment map[string]int64
+	FileId          uint64
 	/**
 	add message
 	*/

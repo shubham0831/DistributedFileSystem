@@ -43,9 +43,10 @@ const (
 	Lost
 )
 
-type dbChunkCount struct {
-	ChunkName string
-	NodeIps   []string
+type DbChunkCount struct {
+	ChunkName      string
+	StartingOffset uint64
+	NodeIps        []string
 }
 
 // map[uint64]*FileInfo // id is fileId
@@ -67,9 +68,10 @@ type FileInfo struct {
 }
 
 type ChunkInfo struct {
-	ChunkName   string
-	ChunkNumber uint64
-	ChunkSize   uint64
+	ChunkName      string
+	ChunkNumber    uint64
+	ChunkSize      uint64
+	StartingOffset uint64
 	// this is a list because it becomes easier to get a random node which will then send replicas to
 	// different places
 	AvailableIn []string
@@ -340,11 +342,11 @@ func (f *FileSystem) InsertFile(fileName string, filePath string, chunkCount uin
 	return uint64(fileId), true
 }
 
-func (f *FileSystem) InsertChunk(fileId uint64, chunkNumber uint64, chunkName string, nodeIp string, chunkSize uint64) bool {
+func (f *FileSystem) InsertChunk(fileId uint64, chunkNumber uint64, chunkName string, nodeIp string, chunkSize uint64, startingOffset uint64) bool {
 	f.dbLock.Lock()
 	defer f.dbLock.Unlock()
 	_, err := f.db.Exec(
-		"INSERT INTO Chunks (File, StorageNode, Size, ChunkNumber, ChunkName) VALUES(?,?,?,?,?);", fileId, nodeIp, chunkSize, chunkNumber, chunkName,
+		"INSERT INTO Chunks (File, StorageNode, Size, ChunkNumber, ChunkName, StartingOffset) VALUES(?,?,?,?,?,?);", fileId, nodeIp, chunkSize, chunkNumber, chunkName, startingOffset,
 	)
 
 	if err != nil {
@@ -381,12 +383,52 @@ func (f *FileSystem) ExpectedChunkCount(fileId uint64) (uint64, bool) {
 	return chunkCount, true
 }
 
-// GetFileChunkAddresses // map[ChunkNumber]name,ipList
-func (f *FileSystem) GetFileChunkAddresses(fileId uint64) (map[uint64]*dbChunkCount, bool) {
+func (f *FileSystem) CheckIsFile(filePath string) (int64, int64, string) {
+	exists := f.CheckDirExist(filePath)
+
+	f.logger.Debugf("Checking for file with path %s", filePath)
+	if !exists {
+		return 0, 0, "File does not exist"
+	}
+
 	f.dbLock.Lock()
 	defer f.dbLock.Unlock()
 	rows, qErr := f.db.Query(
-		"SELECT ChunkName, ChunkNumber, StorageNode FROM Chunks WHERE File= ?;", fileId,
+		"SELECT ID, Size, Folder FROM Files WHERE Path= ?;", filePath,
+	)
+	defer rows.Close()
+
+	if qErr != nil {
+		return 0, 0, "Error in db query"
+	}
+
+	var (
+		id       int64
+		size     int64
+		isFolder bool
+	)
+
+	rows.Next()
+	scanErr := rows.Scan(&id, &size, &isFolder)
+
+	if scanErr != nil {
+		f.logger.Error(scanErr.Error())
+		return 0, 0, "Error in scanning rows"
+	}
+
+	if isFolder {
+		return 0, 0, "Folder selected instead of file"
+	}
+
+	return id, size, ""
+}
+
+// GetFileChunkAddresses // map[ChunkNumber]name,ipList
+func (f *FileSystem) GetFileChunkAddresses(fileId uint64) (map[uint64]*DbChunkCount, bool) {
+	f.dbLock.Lock()
+	defer f.dbLock.Unlock()
+	rows, qErr := f.db.Query(
+		"SELECT ChunkName, ChunkNumber, StorageNode, StartingOffset FROM Chunks WHERE File= ?;", fileId,
 	)
 	defer rows.Close()
 
@@ -396,16 +438,17 @@ func (f *FileSystem) GetFileChunkAddresses(fileId uint64) (map[uint64]*dbChunkCo
 		return nil, false
 	}
 
-	countMap := make(map[uint64]*dbChunkCount)
+	countMap := make(map[uint64]*DbChunkCount)
 
 	var (
-		chunkName   string
-		chunkNumber uint64
-		nodeIp      string
+		chunkName      string
+		chunkNumber    uint64
+		nodeIp         string
+		startingOffset uint64
 	)
 
 	for rows.Next() {
-		scanErr := rows.Scan(&chunkName, &chunkNumber, &nodeIp)
+		scanErr := rows.Scan(&chunkName, &chunkNumber, &nodeIp, &startingOffset)
 
 		if scanErr != nil {
 			f.logger.Error("Error scanning for file chunk count")
@@ -414,11 +457,12 @@ func (f *FileSystem) GetFileChunkAddresses(fileId uint64) (map[uint64]*dbChunkCo
 		}
 
 		if _, exist := countMap[chunkNumber]; !exist {
-			countMap[chunkNumber] = &dbChunkCount{}
+			countMap[chunkNumber] = &DbChunkCount{}
 			countMap[chunkNumber].NodeIps = make([]string, 0)
 		}
 
 		countMap[chunkNumber].ChunkName = chunkName
+		countMap[chunkNumber].StartingOffset = startingOffset
 		countMap[chunkNumber].NodeIps = append(countMap[chunkNumber].NodeIps, nodeIp)
 	}
 	return countMap, true
@@ -571,16 +615,17 @@ func (f *FileSystem) GetAllChunksInfo() (map[uint64]*FileInfo, bool) {
 	infoMap := make(map[uint64]*FileInfo)
 
 	var (
-		chunkId     uint64
-		fileId      uint64
-		nodeIp      string
-		chunkNumber uint64
-		chunkName   string
-		chunkSize   uint64
+		chunkId        uint64
+		fileId         uint64
+		nodeIp         string
+		chunkNumber    uint64
+		chunkName      string
+		chunkSize      uint64
+		startingOffset uint64
 	)
 
 	for rows.Next() {
-		scanErr := rows.Scan(&chunkId, &fileId, &nodeIp, &chunkNumber, &chunkName, &chunkSize)
+		scanErr := rows.Scan(&chunkId, &fileId, &nodeIp, &chunkNumber, &chunkName, &chunkSize, &startingOffset)
 
 		if scanErr != nil {
 			f.logger.Error("Error scanning for file chunk count")
@@ -599,9 +644,10 @@ func (f *FileSystem) GetAllChunksInfo() (map[uint64]*FileInfo, bool) {
 
 		if _, exist := fileInfo.ChunkInfo[chunkId]; !exist {
 			chunkInfo := &ChunkInfo{
-				ChunkName:   chunkName,
-				ChunkNumber: chunkNumber,
-				ChunkSize:   chunkSize,
+				ChunkName:      chunkName,
+				ChunkNumber:    chunkNumber,
+				ChunkSize:      chunkSize,
+				StartingOffset: startingOffset,
 				// todo get all storage nodes and initialize them here
 				// available in will have defaults of false, which we make true when we get a node
 				// not in will have a default of true, which we make false when we get a node
@@ -673,24 +719,26 @@ func (f *FileSystem) GetCountOfChunk(name string) (*ChunkInfo, bool) {
 	}
 
 	var (
-		chunkId     uint64
-		fileId      uint64
-		nodeIp      string
-		chunkNumber uint64
-		chunkName   string
-		chunkSize   uint64
+		chunkId        uint64
+		fileId         uint64
+		nodeIp         string
+		chunkNumber    uint64
+		chunkName      string
+		chunkSize      uint64
+		startingOffset uint64
 	)
 
 	chunkInfo := &ChunkInfo{
-		ChunkName:   name,
-		ChunkNumber: 0,
-		ChunkSize:   0,
-		AvailableIn: make([]string, 0),
-		NotIn:       allIPsMap,
+		ChunkName:      name,
+		ChunkNumber:    0,
+		ChunkSize:      0,
+		AvailableIn:    make([]string, 0),
+		NotIn:          allIPsMap,
+		StartingOffset: 0,
 	}
 
 	for rows.Next() {
-		scanErr := rows.Scan(&chunkId, &fileId, &nodeIp, &chunkSize, &chunkNumber, &chunkName)
+		scanErr := rows.Scan(&chunkId, &fileId, &nodeIp, &chunkSize, &chunkNumber, &chunkName, &startingOffset)
 
 		if scanErr != nil {
 			f.logger.Error("Error scanning for file chunk count")
@@ -700,6 +748,7 @@ func (f *FileSystem) GetCountOfChunk(name string) (*ChunkInfo, bool) {
 
 		chunkInfo.ChunkNumber = chunkNumber
 		chunkInfo.ChunkSize = chunkSize
+		chunkInfo.StartingOffset = startingOffset
 		chunkInfo.AvailableIn = append(chunkInfo.AvailableIn, nodeIp)
 		chunkInfo.NotIn[nodeIp] = false
 	}
